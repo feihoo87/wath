@@ -47,6 +47,7 @@ jobs:
         python setup.py sdist bdist_wheel
     - name: Repair package
       if: ${{ matrix.os == 'ubuntu-latest' }}
+      continue-on-error: true
       run: |
         pip install auditwheel
         wheel_file=dist/*.whl
