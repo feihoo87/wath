@@ -7,6 +7,7 @@ from cycles.clifford import string_to_matrices
 from scipy.linalg import logm
 
 from ..utils.fibheap import FibHeap, FibNode
+from .readout import count_state
 
 
 def input_state_set(n):
@@ -113,7 +114,6 @@ def bayesian_correction_automatic_trimming(state,
                                            correction_matrices,
                                            size_lim=None,
                                            eps=None):
-    from .fit.readout import count_state
 
     counts = count_state(state)
     shots = len(state)
@@ -472,3 +472,31 @@ def measure(op: str):
         else:
             raise ValueError(f"Unknown operator {c}")
     return ''.join(e_op), circ
+
+
+def correct(states: np.ndarray,
+            flips: np.ndarray,
+            e_ops: list | None = None,
+            flip_axis: int = -3,
+            survival_probability: float = 1):
+    nqubits = states.shape[-1]
+
+    states = states.astype(np.bool_)
+    flips = flips.astype(np.bool_)
+
+    if flips.ndim == 1:
+        states ^= flips
+    else:
+        states = np.moveaxis(states, flip_axis, -2)
+        states ^= flips
+        shape = states.shape[:-3]
+        states = states.reshape(*shape, -1, nqubits)
+
+    if e_ops is None:
+        e_ops = [''.join(s) for s in itertools.product('01', repeat=nqubits)]
+
+    prob = exception(states, e_ops)
+
+    r = (1 - survival_probability) / (2**nqubits - 1)
+
+    return (prob - r) / (survival_probability - r)
