@@ -27,5 +27,5 @@ def get_extensions():
     return extensions
 
 
-setup(packages=find_namespace_packages(include=['wath.*']),
+setup(packages=find_namespace_packages(),
       ext_modules=cythonize(get_extensions(), build_dir=f"build"))
