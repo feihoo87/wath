@@ -1,4 +1,5 @@
 from . import graph
+from .fit.delay import relative_delay_to_absolute
 from .fit.geo import (point_in_ellipse, point_in_polygon, point_on_ellipse,
                       point_on_segment)
 from .fit.simple import (complex_amp_to_real, find_cross_point, fit_circle,
@@ -9,4 +10,4 @@ from .interval import Interval
 from .markov.viterbi import hmm_viterbi
 from .prime import Primes
 from .scqubits import Transmon
-from .signal.func import thermal_excitation, effective_temperature
+from .signal.func import effective_temperature, thermal_excitation
