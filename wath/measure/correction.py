@@ -4,7 +4,7 @@ from collections import defaultdict
 
 import numpy as np
 from cycles.clifford import string_to_matrices
-from scipy.linalg import logm
+from scipy.linalg import logm, expm
 
 from ..utils.fibheap import FibHeap, FibNode
 from .readout import count_state
@@ -474,29 +474,86 @@ def measure(op: str):
     return ''.join(e_op), circ
 
 
-def correct(states: np.ndarray,
-            flips: np.ndarray,
-            e_ops: list | None = None,
-            flip_axis: int = -3,
-            survival_probability: float = 1):
-    nqubits = states.shape[-1]
+def readout_error_generator(a):
+    """
+    Generator the readout error matrix.
 
-    states = states.astype(np.bool_)
-    flips = flips.astype(np.bool_)
+    Args:
+        a: bit string of the source state
+           for example, '01' means the error '01' -> '10',
+           '*0' means the error '00' -> '01' and '01' -> '11'
+    """
+    N = len(a)
+    tab = {'0': '1', '1': '0'}
+    b = ''.join([tab.get(c, '*') for c in a])
 
-    if flips.ndim == 1:
-        states ^= flips
-    else:
-        states = np.moveaxis(states, flip_axis, -2)
-        states ^= flips
-        shape = states.shape[:-3]
-        states = states.reshape(*shape, -1, nqubits)
+    s, mask = 0, 0
+    full = 2**N - 1
+    arbitrary = []
 
-    if e_ops is None:
-        e_ops = [''.join(s) for s in itertools.product('01', repeat=nqubits)]
+    for k, c in enumerate(a):
+        mask <<= 1
+        s <<= 1
+        if c == '0':
+            mask |= 1
+            s |= 1
+        elif c == '1':
+            mask |= 1
+        else:
+            arbitrary.append(N - k - 1)
 
-    prob = exception(states, e_ops)
+    ret = np.zeros((2**N, 2**N))
+    ret[s, s] = -1
+    ret[(full ^ s) & mask, s] = 1
 
-    r = (1 - survival_probability) / (2**nqubits - 1)
+    for n in itertools.product([0, 1], repeat=len(arbitrary)):
+        c = sum([x << y for x, y in zip(n, arbitrary)])
+        ret[s | c, s | c] = -1
+        ret[(full ^ s) & mask | c, s | c] = 1
+    return ret
 
-    return (prob - r) / (survival_probability - r)
+
+def probs2Z(probs):
+    """
+    Convert the probabilities to the Z operator.
+
+    Args:
+        probs: the probabilities of the states
+               shape is (..., 2**N)
+               sorted by the basis |00...0>, |00...1>, ..., |11...1>
+
+    Returns:
+        the Z operator
+        sorted by II...I, II...Z, ..., ZZ...Z
+
+    """
+    N = round(np.log2(probs.shape[-1]))
+
+    k, s = np.mgrid[0:2**N, 0:2**N]
+    T = k & s
+
+    try:
+        M = np.bitwise_count(T)
+    except:
+        M = np.zeros((2**N, 2**N), dtype=np.int8)
+        for _ in range(N):
+            M += T & 1
+            T >>= 1
+
+    return np.einsum('ij,...j', M, probs)
+
+
+def Z2probs(exceptions):
+    """
+    Convert the Z operator to the probabilities.
+
+    Args:
+        exceptions: the Z operator
+                    sorted by II...I, II...Z, ..., ZZ...Z
+
+    Returns:
+        the probabilities of the states
+        sorted by the basis |00...0>, |00...1>, ..., |11...1>
+    """
+    return probs2Z(exceptions) / exceptions.shape[-1]
+
