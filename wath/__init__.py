@@ -8,3 +8,5 @@ from .fit.symmetry import find_axis_of_symmetry, find_center_of_symmetry
 from .interval import Interval
 from .markov.viterbi import hmm_viterbi
 from .prime import Primes
+from .scqubits import Transmon
+from .signal.func import thermal_excitation, effective_temperature

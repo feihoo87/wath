@@ -115,6 +115,13 @@ def thermal_excitation(T, f01, *levels):
         return pp * p0
 
 
+def effective_temperature(p1, f01):
+    """
+    effective temperature of qubit
+    """
+    return -0.5 * const.h * f01 / const.k / np.arctanh(2 * p1 - 1)
+
+
 def Z_in(w, ZL, l, Z0=50, v=1e8):
     """Impedance of the transmission line
     """
