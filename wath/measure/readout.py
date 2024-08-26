@@ -409,21 +409,3 @@ def get_threshold_info(s0, s1, thr=None, phi=None):
         'std': (rr0, ri0, rr1, ri1, cov0, cov1),
         'cdf': (x, a, b, c)
     }
-
-
-def getThresholdInfo(s0, s1):
-    warnings.warn('getThresholdInfo is deprecated, use get_threshold_info',
-                  DeprecationWarning, 2)
-    return get_threshold_info(s0, s1)
-
-
-def classifyData(data, measure_gates, avg=False):
-    warnings.warn('classifyData is deprecated, use classify_data',
-                  DeprecationWarning, 2)
-    return classify_data(data, measure_gates, avg=avg)
-
-
-def countState(state):
-    warnings.warn('countState is deprecated, use count_state',
-                  DeprecationWarning, 2)
-    return count_state(state)
