@@ -409,3 +409,27 @@ def get_threshold_info(s0, s1, thr=None, phi=None):
         'std': (rr0, ri0, rr1, ri1, cov0, cov1),
         'cdf': (x, a, b, c)
     }
+
+
+def shots_to_b8(data):
+    bits_per_shot = data.shape[-1]
+    bytes_per_shot = (bits_per_shot + 7) // 8
+    b8 = np.zeros((*data.shape[:-1], bytes_per_shot), dtype=np.uint8)
+
+    shots = data.astype(np.uint8)
+
+    for i in range(bits_per_shot):
+        b8[:, i // 8] += shots[:, i] << (i % 8)
+
+    return b8
+
+
+def b8_to_shots(b8, bits_per_shot=None):
+    if bits_per_shot is None:
+        bits_per_shot = 8 * b8.shape[-1]
+    shots = np.zeros((*b8.shape[:-1], bits_per_shot), dtype=np.uint8)
+
+    for i in range(bits_per_shot):
+        shots[:, i] = (b8[:, i // 8] >> (i % 8)) & 1
+
+    return shots
