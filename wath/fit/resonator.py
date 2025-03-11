@@ -1,8 +1,8 @@
 import numpy as np
 from scipy.optimize import leastsq, minimize
 
-from waveforms.math.fit.simple import fit_circle
-from waveforms.math.signal.func import complexPeaks
+from ..signal.func import complexPeaks
+from .simple import fit_circle
 
 
 def get_unit_prefix(value):
