@@ -87,6 +87,17 @@ def cavity_spectrum(x, offset, period, fc, f01, g=0.05, d=0.1, Ec=0.24):
 
 
 def guess_transmon_spectrum(x, y, static_params):
+    """
+    Guess parameters for transmon spectrum.
+
+    Args:
+        x (np.ndarray): flux bias
+        y (np.ndarray): frequency of transmon
+        static_params (dict): static parameters
+
+    Returns:
+        dict: EJ, Ec, d, offset, period
+    """
     x = np.asarray(x)
     y = np.asarray(y)
     f01_max = np.max(
