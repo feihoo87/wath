@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.optimize import curve_fit
+from scipy.special import voigt_profile
 
 from ..scqubits import Transmon
 from ._fit import fit
@@ -120,3 +121,27 @@ def fit_transmon_spectrum(x,
                sigma=sigma,
                guess=guess_transmon_spectrum,
                static_params=static_params)
+
+
+def spectrum_peak(f, f0, Omega, Gamma_1, gamma_phi):
+    """
+    Calculate the spectrum of a driven qubit.
+
+    Args:
+        f (np.ndarray): frequency (Ordinary frequency)
+        f0 (float): qubit frequency (Ordinary frequency)
+        Omega (float): driving amplitude or Rabi frequency (Angular frequency)
+        Gamma_1 (float): relaxation rate (1 / T1)
+        gamma_phi (float): pure dephasing rate (1 / T_phi)
+
+    Returns:
+        np.ndarray: spectrum
+    """
+    Delta = 2 * np.pi * (f - f0)
+
+    gamma = 0.5 * np.sqrt(Gamma_1**2 + 2 * Omega**2)
+
+    A = Omega**2 / (2 * Omega**2 + Gamma_1**2) / voigt_profile(0, 0, gamma)
+
+    sigma = gamma_phi / (np.pi * np.sqrt(2))
+    return A * voigt_profile(Delta, sigma, gamma)
