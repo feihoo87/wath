@@ -2,6 +2,7 @@ from . import graph
 from .fit.delay import relative_delay_to_absolute
 from .fit.geo import (point_in_ellipse, point_in_polygon, point_on_ellipse,
                       point_on_segment)
+from .fit.peak import fit_peaks
 from .fit.simple import (complex_amp_to_real, find_cross_point, fit_circle,
                          fit_cosine, fit_k, fit_max, fit_pole, inv_poly,
                          lin_fit, poly_fit)

@@ -98,13 +98,14 @@ def find_axis_of_symmetry(x, y, z=None):
         Axis of symmetry.
     """
     x, y, z = _as_meshgrid(x, y, z)
+    z = z - np.mean(z)
 
     if z.ndim == 2:
         c = fftconvolve(z, z, mode='same', axes=1).sum(axis=0)
     else:
         c = fftconvolve(z, z, mode='same')
     i = np.argmax(c)
-    x_center = len(c) / 2
+    x_center = (len(c) - 1) // 2
     axis_of_symmetry_i = (i + x_center) / 2
     index = math.ceil(axis_of_symmetry_i)
     remainder = axis_of_symmetry_i - index
@@ -130,11 +131,12 @@ def find_center_of_symmetry(x, y, z):
         Center of symmetry.
     """
     x, y, z = _as_meshgrid(x, y, z)
+    z = z - np.mean(z)
 
     c = fftconvolve(z, z, mode='same')
     j, i = np.unravel_index(np.argmax(c), c.shape)
-    x_center = c.shape[1] / 2
-    y_center = c.shape[0] / 2
+    x_center = (c.shape[1] - 1) // 2
+    y_center = (c.shape[0] - 1) // 2
     center_of_symmetry_i = (i + x_center) / 2
     center_of_symmetry_j = (j + y_center) / 2
     index_i = math.ceil(center_of_symmetry_i)
