@@ -242,7 +242,7 @@ def factor_filter(b, a):
     return filters
 
 
-def stable_filter(exp_decay_filters: list):
+def stable_filter(exp_decay_filters: list, sample_rate: float):
     """
     check if the filter is stable
 
