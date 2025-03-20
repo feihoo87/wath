@@ -1,11 +1,11 @@
+import warnings
 from itertools import repeat, zip_longest
 from typing import Sequence
 
 import numpy as np
 from scipy.fftpack import fft, fftfreq, ifft, ifftshift
 from scipy.optimize import curve_fit
-from scipy.signal import fftconvolve, lfilter, lfiltic, zpk2sos, zpk2tf
-from waveforms.waveform import Waveform
+from scipy.signal import fftconvolve, lfilter, lfiltic, tf2zpk, zpk2sos, zpk2tf
 
 
 def shift(signal: np.ndarray, delay: float, dt: float) -> np.ndarray:
@@ -188,6 +188,8 @@ def reflection(sig, A, tau, sample_rate):
 
 
 def correct_reflection(sig, A, tau, sample_rate=None):
+    from waveforms.waveform import Waveform
+
     if isinstance(sig, Waveform):
         return 1 / (1 - A) * sig - A / (1 - A) * (sig >> tau)
     if sample_rate is not None:
@@ -240,6 +242,26 @@ def factor_filter(b, a):
     return filters
 
 
+def stable_filter(exp_decay_filters: list):
+    """
+    check if the filter is stable
+
+    Args:
+        exp_decay_filters (list): list of (amp, tau) pairs
+    """
+    filters = []
+    for amp, tau in exp_decay_filters:
+        a, b = exp_decay_filter(amp, tau, sample_rate)
+        filters.append((b, a))
+
+    b, a = combine_filters(filters)
+    z, p, k = tf2zpk(b, a)
+    if np.all(np.abs(p) < 1):
+        return True
+    else:
+        return False
+
+
 def predistort(sig: np.ndarray,
                filters: list = None,
                ker: np.ndarray = None,
@@ -250,6 +272,12 @@ def predistort(sig: np.ndarray,
                return_zf: bool = False) -> np.ndarray:
     if filters is not None:
         b, a = combine_filters(filters)
+        z, p, k = tf2zpk(b, a)
+        if np.all(np.abs(p) < 1):
+            pass
+        else:
+            warnings.warn('Warning: filter is unstable')
+
         if zi is None:
             if initial_x is None:
                 initial_x = np.full((len(b) - 1, ), initial)
