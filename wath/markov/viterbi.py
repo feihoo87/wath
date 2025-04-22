@@ -3,7 +3,20 @@ import numpy as np
 
 def hmm_viterbi(z, QP_tau=1e-3, Pg=0.999, Pe=0.98, shot_time=3.2e-6):
     """
-    Viterbi 算法
+    Viterbi 算法，用来在给定一个观测序列 z 的前提下，求出最可能的隐藏状态序列。
+
+    Parameters
+    ----------
+    z : list
+        观测序列（长度为 T)，是一个整型数组，例如 [0,1,0,1,…], 每个元素表示在
+        当前时间片 (shot) 观测到的符号 (0 或 1)。
+    QP_tau : float
+        两个隐藏状态之间转换的时间常数（以同一时间单位计）。它决定了状态在平均
+        QP_tau 时间内完成一次跃迁的速率。
+    Pg, Pe: float
+        给定隐藏状态时，观测某个符号的概率。一般写成观测概率矩阵
+    shot_time : float
+        单个观测时间片的时长。结合 QP_tau 可以算出每个时间步的转移概率。
     """
 
     # 定义初始状态概率向量
@@ -51,6 +64,6 @@ def hmm_viterbi(z, QP_tau=1e-3, Pg=0.999, Pe=0.98, shot_time=3.2e-6):
         path[t] = backpointer[path[t + 1], t + 1]
 
     # 打印结果
-    print("Observations:", obs)
-    print("Most likely hidden states:", path)
+    # print("Observations:", obs)
+    # print("Most likely hidden states:", path)
     return path
