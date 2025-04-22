@@ -1,69 +1,85 @@
 import numpy as np
 
 
-def hmm_viterbi(z, QP_tau=1e-3, Pg=0.999, Pe=0.98, shot_time=3.2e-6):
+def viterbi_hmm(observations: np.ndarray,
+                transition_time_constant_0_to_1: float = 1e-3,
+                transition_time_constant_1_to_0: float = 1e-3,
+                emission_prob_state0: float = 0.98,
+                emission_prob_state1: float = 0.999,
+                timestep: float = 3.2e-6) -> np.ndarray:
     """
-    Viterbi 算法，用来在给定一个观测序列 z 的前提下，求出最可能的隐藏状态序列。
+    Perform the Viterbi algorithm for a two-state HMM with asymmetric time-based transition rates.
 
     Parameters
     ----------
-    z : list
-        观测序列（长度为 T)，是一个整型数组，例如 [0,1,0,1,…], 每个元素表示在
-        当前时间片 (shot) 观测到的符号 (0 或 1)。
-    QP_tau : float
-        两个隐藏状态之间转换的时间常数（以同一时间单位计）。它决定了状态在平均
-        QP_tau 时间内完成一次跃迁的速率。
-    Pg, Pe: float
-        给定隐藏状态时，观测某个符号的概率。一般写成观测概率矩阵
-    shot_time : float
-        单个观测时间片的时长。结合 QP_tau 可以算出每个时间步的转移概率。
+    observations : array_like of int
+        Sequence of observed symbols (0 or 1), shape (T,).
+    transition_time_constant_0_to_1 : float, optional
+        Average time between transitions from state 0 to state 1 (in same time unit as timestep).
+    transition_time_constant_1_to_0 : float, optional
+        Average time between transitions from state 1 to state 0 (in same time unit as timestep).
+    emission_prob_state0 : float, optional
+        Probability of correctly observing symbol 0 when the hidden state is 0,
+        i.e., P(obs=0 | state=0) (true negative rate). Default 0.98.
+    emission_prob_state1 : float, optional
+        Probability of correctly observing symbol 1 when the hidden state is 1,
+        i.e., P(obs=1 | state=1) (true positive rate). Default 0.999.
+    timestep : float, optional
+        Duration of each observation time step. Default 3.2e-6.
+
+    Returns
+    -------
+    np.ndarray
+        Most likely hidden state sequence (0 or 1), shape (T,).
     """
+    obs = np.asarray(observations, dtype=int)
+    T = obs.shape[0]
+    N = 2  # number of hidden states
 
-    # 定义初始状态概率向量
-    start_prob = np.log(np.array([1 - 1e-12, 1e-12]))
+    # Initial state log-probabilities
+    initial_log_prob = np.log(np.array([1 - 1e-12, 1e-12]))
 
-    # 定义转移概率矩阵   3.2us o--->e
-    trans_rate_oe = 1 / QP_tau * shot_time
+    # Transition probabilities per timestep (asymmetric)
+    rate_0_to_1 = timestep / transition_time_constant_0_to_1
+    rate_1_to_0 = timestep / transition_time_constant_1_to_0
+    log_transition = np.log(
+        np.array([[1 - rate_0_to_1, rate_0_to_1],
+                  [rate_1_to_0, 1 - rate_1_to_0]]))
 
-    trans_prob = np.log(
-        np.array([[1 - trans_rate_oe, trans_rate_oe],
-                  [trans_rate_oe, 1 - trans_rate_oe]]))
+    # Emission log-probabilities: rows=states, cols=observations
+    log_emission = np.log(
+        np.array([[emission_prob_state0, 1 - emission_prob_state0],
+                  [1 - emission_prob_state1, emission_prob_state1]]))
 
-    # 定义观测概率矩阵
-    # Pg = 0.972
-    # Pe = 0.92
-    obs_prob = np.log(np.array([[Pe, 1 - Pe], [1 - Pg, Pg]]))
+    # Initialize Viterbi matrices
+    viterbi = np.full((N, T), -np.inf)
+    backpointer = np.zeros((N, T), dtype=int)
 
-    # 定义观测序列
-    # obs = np.array([0, 1, 2, 0, 2, 1, 1, 0, 2, 1])
-    obs = np.asarray(z)
+    # Initialization step
+    viterbi[:, 0] = initial_log_prob + log_emission[:, obs[0]]
 
-    # 定义 Viterbi 算法的变量
-    n_states = len(start_prob)
-    T = len(obs)
-    viterbi = np.zeros((n_states, T))
-    backpointer = np.zeros((n_states, T), dtype=np.int32)
-
-    # 初始化 Viterbi 算法的第一列
-    viterbi[:, 0] = start_prob + obs_prob[:, obs[0]]
-
-    # 递推计算 Viterbi 算法的剩余部分
+    # Recursion step
     for t in range(1, T):
-        for s in range(n_states):
-            # 计算每个状态的最大概率
-            max_prob = viterbi[:, t - 1] + trans_prob[:, s] + obs_prob[s,
-                                                                       obs[t]]
-            # 更新 Viterbi 矩阵和后向指针矩阵
-            viterbi[s, t] = np.max(max_prob)
-            backpointer[s, t] = np.argmax(max_prob)
+        for s in range(N):
+            prob = viterbi[:, t -
+                           1] + log_transition[:, s] + log_emission[s, obs[t]]
+            backpointer[s, t] = np.argmax(prob)
+            viterbi[s, t] = prob[backpointer[s, t]]
 
-    # 回溯路径
-    path = np.zeros(T, dtype=np.int32)
+    # Backtrace step
+    path = np.zeros(T, dtype=int)
     path[-1] = np.argmax(viterbi[:, -1])
     for t in range(T - 2, -1, -1):
         path[t] = backpointer[path[t + 1], t + 1]
 
-    # 打印结果
-    # print("Observations:", obs)
-    # print("Most likely hidden states:", path)
     return path
+
+
+if __name__ == "__main__":
+    # Example usage
+    example_obs = [0, 1, 0, 1, 1, 0, 0, 1]
+    hidden_states = viterbi_hmm(example_obs,
+                                transition_time_constant_0_to_1=2e-3,
+                                transition_time_constant_1_to_0=0.5e-3)
+    print("Observations:", example_obs)
+    print("Hidden state path:", hidden_states)
