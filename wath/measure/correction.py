@@ -4,7 +4,7 @@ from collections import defaultdict
 
 import numpy as np
 from cycles.clifford import string_to_matrices
-from scipy.linalg import logm, expm
+from scipy.linalg import expm, logm
 
 from ..utils.fibheap import FibHeap, FibNode
 from .readout import count_state
@@ -540,7 +540,7 @@ def probs2Z(probs):
             M += T & 1
             T >>= 1
 
-    return np.einsum('ij,...j', M, probs)
+    return np.einsum('ij,...j', (-1)**M, probs)
 
 
 def Z2probs(exceptions):
@@ -556,4 +556,3 @@ def Z2probs(exceptions):
         sorted by the basis |00...0>, |00...1>, ..., |11...1>
     """
     return probs2Z(exceptions) / exceptions.shape[-1]
-

@@ -35,6 +35,30 @@ def calc_delays(relative_delays: dict[tuple[str, str], float],
                 reference: float = 0,
                 reference_channel: Optional[str] = None,
                 full: bool = False) -> dict[str, float]:
+    """
+    Calculate the absolute delays from the relative delays.
+
+    Parameters
+    ----------
+    relative_delays : dict
+        A dictionary of relative delays, where the keys are tuples of
+        channel names and the values are the relative delays between them.
+    reference : float, optional
+        The reference delay to be added to the calculated absolute delays.
+        Default is 0.
+    reference_channel : str, optional
+        The reference channel to be used for the calculation. If None,
+        the first channel in the list will be used.
+    full : bool, optional
+        If True, return the full covariance matrix of the delays. Default
+        is False.
+
+    Returns
+    -------
+    dict
+        A dictionary of absolute delays, where the keys are channel names
+        and the values are the absolute delays.
+    """
     channels = []
     channels_map = {}
 
@@ -103,6 +127,45 @@ def relative_delay_to_absolute(relative_delays: dict[tuple[str, str], float],
                                reference_channel: Optional[str] = None,
                                method: Literal['mst', 'lsq'] = 'mst',
                                full: bool = False) -> dict[str, float]:
+    """
+    Convert relative delays to absolute delays.
+    
+    This function takes a dictionary of relative delays and converts
+    them to absolute delays using either the minimum spanning tree
+    method or the least squares method. The absolute delays are then
+    calculated using the calc_delays function.
+
+    Parameters
+    ----------
+    relative_delays : dict
+        A dictionary of relative delays, where the keys are tuples of
+        channel names and the values are the relative delays between them.
+    reference : float, optional
+        The reference delay to be added to the calculated absolute delays.
+        Default is 0.
+    reference_channel : str, optional
+        The reference channel to be used for the calculation. If None,
+        the first channel in the list will be used.
+    method : str, optional
+        The method to be used for the calculation. Either 'mst' or
+        'lsq'. Default is 'mst'.
+    full : bool, optional
+        If True, return the full covariance matrix of the delays. Default
+        is False.
+    
+    Returns
+    -------
+    dict
+        A dictionary of absolute delays, where the keys are channel names
+        and the values are the absolute delays.
+    
+    Raises
+    ------
+    ValueError
+        If the method is not 'mst' or 'lsq'.
+    KeyError
+        If the reference channel is not in the relative delays.
+    """
     groups = graphs(relative_delays.keys())
     graph_list = []
     if method == 'mst':
