@@ -3,6 +3,7 @@ from collections import defaultdict
 
 import numpy as np
 from scipy.optimize import minimize
+from scipy.spatial import ConvexHull
 from scipy.special import erf, erfinv
 
 from ..fit.geo import EPS, point_in_polygon
@@ -354,6 +355,38 @@ def fit_readout_distribution2(s0, s1):
 
     return (c0, c1, rr0 * scale, rr1 * scale, ri0 * scale, ri1 * scale, p0, p1,
             0, 0)
+
+
+def get_convex_hull(points):
+    """
+    获取凸包层
+
+    凸包层是按照从外到内的顺序返回的，最外层是第一个返回的，最内层是最后一个返回的。
+
+    Args:
+        points: 点集
+
+    Returns:
+        凸包层
+    """
+    # 复制点集以便逐步移除外层
+    remaining_points = points.copy()
+    hull_layers = []
+
+    # 递归计算凸包层
+    while True:
+        if len(remaining_points) < 3:
+            break
+        hull = ConvexHull(remaining_points)
+        hull_vertices = remaining_points[hull.vertices]
+        hull_layers.append(hull_vertices)
+        # 移除当前凸包的顶点
+        mask = np.ones(len(remaining_points), dtype=bool)
+        mask[hull.vertices] = False
+        remaining_points = remaining_points[mask]
+    hull_layers.append(remaining_points)
+
+    return hull_layers
 
 
 def get_threshold_info(s0, s1, thr=None, phi=None):

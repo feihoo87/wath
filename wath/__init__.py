@@ -11,6 +11,8 @@ from .interval import Interval
 from .markov.viterbi import viterbi_hmm
 from .measure.correction import Z2probs, exception, probs2Z
 from .measure.demodulate import getFTMatrix
+from .measure.readout import (classify, count_state, count_to_diag,
+                              default_classify, get_threshold_info)
 from .prime import Primes
 from .scqubits import Transmon
 from .signal.func import effective_temperature, thermal_excitation
