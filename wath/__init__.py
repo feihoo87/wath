@@ -15,4 +15,4 @@ from .measure.readout import (classify, count_state, count_to_diag,
                               default_classify, get_threshold_info)
 from .prime import Primes
 from .scqubits import Transmon
-from .signal.func import effective_temperature, thermal_excitation
+from .signal.func import effective_temperature, thermal_excitation, Svv, Sii
