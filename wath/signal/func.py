@@ -37,7 +37,7 @@ def Svv(f, T, Z=lambda f: 50 * np.ones_like(f)):
 
 def Sii(f, T, Z=lambda f: 50 * np.ones_like(f)):
     """
-    power spectral density of the series noise voltage
+    power spectral density of the series noise current
 
     Johnson-Nyquist noise
     https://en.wikipedia.org/wiki/Johnson%E2%80%93Nyquist_noise
