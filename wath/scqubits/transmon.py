@@ -345,70 +345,8 @@ def spectrum(C=100.0,
              levels=5,
              gap=200.0,
              T=10.0,
-             selector=None,
-             decouple=False):
-    """
-    C: capacitance matrix in fF
-    Rn: normal resistance in Ohm
-    flux: flux in Phi_0
-    ng: charge bias
-    d: asymmetry parameter
-    levels: number of levels
-    gap: superconducting gap in ueV
-    T: temperature in mK
-
-    return: spectrum in GHz
-    """
-    if decouple:
-        w0 = [
-            eigvalsh_tridiagonal(hc, hp) for hc, hp in zip(
-                H_C(C, N=levels, ng=ng, decouple=True)[0],
-                H_J(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True))
-        ]
-        w0 = np.sort(
-            np.sum(np.meshgrid(*w0, copy=False, indexing='ij'),
-                   axis=0).reshape(-1))
-        return w0[1:] - w0[0]
-    H = H_C(C, N=levels, ng=ng) + H_J(Rn, flux, d=d, gap=gap, T=T, N=levels)
-    if selector is None:
-        w = eigvalsh(H)
-        return w[1:] - w[0]
-
-    assert len(selector) == C.shape[0] or len(
-        selector[0]) == C.shape[0], "selector must be a list of qubit indices"
-
-    w, psi = eigh(H)
-
-    w0, baises = [], []
-    for hc, hp in zip(
-            H_C(C, N=levels, ng=ng, decouple=True)[0],
-            H_J(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True)):
-        e, v = eigh_tridiagonal(hc, hp)
-        w0.append(e)
-        baises.append(v)
-    if isinstance(selector[0], int):
-        psi0 = tenser([baises[q][:, i] for q, i in enumerate(selector)])
-        overlap = np.abs((psi0 @ psi)[1:])**2
-    else:
-        psi0 = np.array([
-            tenser([baises[q][:, i] for q, i in enumerate(s)])
-            for s in selector
-        ])
-        overlap = np.abs((psi0 @ psi)[:, 1:])**2
-
-    return overlap, w[1:] - w[0]
-
-
-def spectrum2(C=100.0,
-              Rn=6000.0,
-              flux=0.0,
-              ng=0.0,
-              d=0.0,
-              levels=5,
-              gap=200.0,
-              T=10.0,
-              decouple=False,
-              return_psi=False):
+             decouple=False,
+             return_psi=False):
     """
     C: capacitance matrix in fF
     Rn: normal resistance in Ohm
