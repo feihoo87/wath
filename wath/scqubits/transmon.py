@@ -2,6 +2,7 @@ import itertools
 from functools import reduce
 
 import numpy as np
+from numpy.linalg import eigh, eigvalsh
 from scipy.linalg import eigh_tridiagonal, eigvalsh_tridiagonal
 from scipy.optimize import minimize
 
@@ -289,6 +290,7 @@ def H_C(C, N=5, ng=None, decouple=False):
     I = np.eye(n.shape[0])
 
     if decouple:
+        n = np.arange(-N, N + 1)
         return [0.5 * A[i, i] * (n - ng[i])**2 for i in range(num_qubits)]
 
     n_ops = []
@@ -305,13 +307,14 @@ def H_C(C, N=5, ng=None, decouple=False):
     return ret
 
 
-def H_phi(Rn, flux, d=0, gap=200, T=10, N=5, decouple=False):
+def H_J(Rn, flux, d=0, gap=200, T=10, N=5, decouple=False):
     num_qubits = Rn.shape[0]
     EJ = flux_to_EJ(flux, Rn_to_EJ(Rn, gap, T), d)
     op = cos_phi_op(N)
     I = np.eye(op.shape[0])
 
     if decouple:
+        op = np.full(2 * N, 0.5)
         return [-EJ[i] * op for i in range(num_qubits)]
 
     ret = np.zeros((op.shape[0]**num_qubits, op.shape[0]**num_qubits),
@@ -347,33 +350,38 @@ def spectrum(C=100.0,
     """
     if decouple:
         w0 = [
-            np.linalg.eigvalsh(hc + hp) for hc, hp in zip(
+            eigvalsh_tridiagonal(hc, hp) for hc, hp in zip(
                 H_C(C, N=levels, ng=ng, decouple=True),
-                H_phi(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True))
+                H_J(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True))
         ]
         w0 = np.sort([np.sum(l) for l in itertools.product(*w0)])
         return w0[1:] - w0[0]
-    H = H_C(C, N=levels, ng=ng) + H_phi(Rn, flux, d=d, gap=gap, T=T, N=levels)
+    H = H_C(C, N=levels, ng=ng) + H_J(Rn, flux, d=d, gap=gap, T=T, N=levels)
     if selector is None:
-        w = np.linalg.eigvalsh(H)
+        w = eigvalsh(H)
         return w[1:] - w[0]
 
-    assert len(
-        selector) == C.shape[0], "selector must be a list of qubit indices"
+    assert len(selector) == C.shape[0] or len(
+        selector[0]) == C.shape[0], "selector must be a list of qubit indices"
 
-    w, psi = np.linalg.eigh(H)
+    w, psi = eigh(H)
 
-    H0 = [
-        hc + hp for hc, hp in zip(
-            H_C(C, N=levels, ng=ng, decouple=True),
-            H_phi(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True))
-    ]
     w0, baises = [], []
-    for h in H0:
-        e, v = np.linalg.eigh(h)
+    for hc, hp in zip(
+            H_C(C, N=levels, ng=ng, decouple=True),
+            H_J(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True)):
+        e, v = eigh_tridiagonal(hc, hp)
         w0.append(e)
         baises.append(v)
-    psi0 = reduce(np.kron, [baises[q][:, i] for q, i in enumerate(selector)])
-    overlap = np.abs(psi0.T @ psi)**2
+    if isinstance(selector[0], int):
+        psi0 = reduce(np.kron,
+                      [baises[q][:, i] for q, i in enumerate(selector)])
+        overlap = np.abs((psi0 @ psi)[1:])**2
+    else:
+        psi0 = np.array([
+            reduce(np.kron, [baises[q][:, i] for q, i in enumerate(s)])
+            for s in selector
+        ])
+        overlap = np.abs((psi0 @ psi)[:, 1:])**2
 
-    return overlap[:, 1:], w[1:] - w[0]
+    return overlap, w[1:] - w[0]
