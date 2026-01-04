@@ -29,6 +29,10 @@ RESISTANCE_UNIT = 1.0  # Ohm
 """
 
 
+def tenser(matrices):
+    return reduce(np.kron, matrices)
+
+
 class Transmon():
 
     def __init__(self, **kw):
@@ -279,32 +283,40 @@ def H_C(C, N=5, ng=None, decouple=False):
         ng = np.zeros(num_qubits)
     elif isinstance(ng, (int, float)):
         ng = np.full(num_qubits, ng)
-    elif isinstance(ng, (list, tuple)):
-        ng = np.array(ng)
+    elif isinstance(ng, (list, tuple, np.ndarray)):
+        ng = np.asarray(ng)
+        assert ng.ndim == 1, "ng must be a 1D array"
+        assert ng.shape[
+            0] == num_qubits, "ng must have the same length as the number of qubits"
     else:
         raise ValueError("ng must be a number or a list of numbers")
 
     A = np.linalg.inv(mass(C))
-
-    n = n_op(N)
-    I = np.eye(n.shape[0])
+    n = np.arange(-N, N + 1)
+    n_ops = [n - ng[i] for i in range(num_qubits)]
 
     if decouple:
-        n = np.arange(-N, N + 1)
-        return [0.5 * A[i, i] * (n - ng[i])**2 for i in range(num_qubits)]
+        return [0.5 * A[i, i] * n_ops[i]**2
+                for i in range(num_qubits)], n_ops, A
 
-    n_ops = []
-    for i in range(num_qubits):
-        n_ops.append(
-            reduce(np.kron,
-                   [n - ng[i] if j == i else I for j in range(num_qubits)]))
+    I = np.ones_like(n)
 
-    ret = np.zeros_like(n_ops[0], dtype=float)
+    H_C_diag = np.sum([
+        tenser([
+            A[i, i] / 2 * n_ops[i]**2 if i == j else I
+            for i in range(num_qubits)
+        ]) for j in range(num_qubits)
+    ],
+                      axis=0)
+    for i, j in itertools.combinations(range(num_qubits), r=2):
+        H_C_diag += A[i, j] * tenser(
+            [n_ops[k] if k == i or k == j else I for k in range(num_qubits)])
+    return np.diag(H_C_diag)
 
-    for i, n_i in enumerate(n_ops):
-        for j, n_j in enumerate(n_ops):
-            ret += n_i * A[i, j] / 2 * n_j
-    return ret
+    # for i, n_i in enumerate(n_ops):
+    #     for j, n_j in enumerate(n_ops):
+    #         ret += n_i * A[i, j] / 2 * n_j
+    # return ret
 
 
 def H_J(Rn, flux, d=0, gap=200, T=10, N=5, decouple=False):
@@ -320,8 +332,7 @@ def H_J(Rn, flux, d=0, gap=200, T=10, N=5, decouple=False):
     ret = np.zeros((op.shape[0]**num_qubits, op.shape[0]**num_qubits),
                    dtype=float)
     for i in range(num_qubits):
-        ret -= EJ[i] * reduce(np.kron,
-                              [op if j == i else I for j in range(num_qubits)])
+        ret -= EJ[i] * tenser([op if j == i else I for j in range(num_qubits)])
 
     return ret
 
@@ -351,10 +362,12 @@ def spectrum(C=100.0,
     if decouple:
         w0 = [
             eigvalsh_tridiagonal(hc, hp) for hc, hp in zip(
-                H_C(C, N=levels, ng=ng, decouple=True),
+                H_C(C, N=levels, ng=ng, decouple=True)[0],
                 H_J(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True))
         ]
-        w0 = np.sort([np.sum(l) for l in itertools.product(*w0)])
+        w0 = np.sort(
+            np.sum(np.meshgrid(*w0, copy=False, indexing='ij'),
+                   axis=0).reshape(-1))
         return w0[1:] - w0[0]
     H = H_C(C, N=levels, ng=ng) + H_J(Rn, flux, d=d, gap=gap, T=T, N=levels)
     if selector is None:
@@ -368,20 +381,73 @@ def spectrum(C=100.0,
 
     w0, baises = [], []
     for hc, hp in zip(
-            H_C(C, N=levels, ng=ng, decouple=True),
+            H_C(C, N=levels, ng=ng, decouple=True)[0],
             H_J(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True)):
         e, v = eigh_tridiagonal(hc, hp)
         w0.append(e)
         baises.append(v)
     if isinstance(selector[0], int):
-        psi0 = reduce(np.kron,
-                      [baises[q][:, i] for q, i in enumerate(selector)])
+        psi0 = tenser([baises[q][:, i] for q, i in enumerate(selector)])
         overlap = np.abs((psi0 @ psi)[1:])**2
     else:
         psi0 = np.array([
-            reduce(np.kron, [baises[q][:, i] for q, i in enumerate(s)])
+            tenser([baises[q][:, i] for q, i in enumerate(s)])
             for s in selector
         ])
         overlap = np.abs((psi0 @ psi)[:, 1:])**2
 
     return overlap, w[1:] - w[0]
+
+
+def spectrum2(C=100.0,
+              Rn=6000.0,
+              flux=0.0,
+              ng=0.0,
+              d=0.0,
+              levels=5,
+              gap=200.0,
+              T=10.0,
+              decouple=False,
+              return_psi=False):
+    """
+    C: capacitance matrix in fF
+    Rn: normal resistance in Ohm
+    flux: flux in Phi_0
+    ng: charge bias
+    d: asymmetry parameter
+    levels: number of levels
+    gap: superconducting gap in ueV
+    T: temperature in mK
+
+    return: spectrum in GHz
+    """
+    num_qubits = C.shape[0]
+    w0, n_ops = [], []
+    h_c_ops, nn, A = H_C(C, N=levels, ng=ng, decouple=True)
+    h_j_ops = H_J(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True)
+    for hc, hp, n in zip(h_c_ops, h_j_ops, nn):
+        e, v = eigh_tridiagonal(hc, hp)
+        w0.append(e[:levels])
+        v = v[:, :levels]
+        n_ops.append(v.T.conj() @ np.diag(n) @ v)
+
+    w0 = np.sum(np.meshgrid(*w0, copy=False, indexing='ij'),
+                axis=0).reshape(-1)
+
+    if decouple:
+        w0 = np.sort(w0)
+        return w0[1:] - w0[0]
+
+    I = np.eye(levels)
+
+    H = np.diag(w0)
+    for i, j in itertools.combinations(range(num_qubits), r=2):
+        H = H + A[i, j] * tenser(
+            [n_ops[k] if k == i or k == j else I for k in range(num_qubits)])
+
+    if return_psi:
+        w, psi = eigh(H)
+        return w[1:] - w[0], psi[:, 1:]
+    else:
+        w = eigvalsh(H)
+        return w[1:] - w[0]
