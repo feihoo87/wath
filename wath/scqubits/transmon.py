@@ -1,12 +1,13 @@
-from functools import lru_cache, reduce
+import itertools
+from functools import reduce
 
 import numpy as np
 from scipy.linalg import eigh_tridiagonal, eigvalsh_tridiagonal
 from scipy.optimize import minimize
 
-CAP_UNIT = 1e-15
-FREQ_UNIT = 1e9
-RESISTANCE_UNIT = 1.0
+CAP_UNIT = 1e-15  # fF
+FREQ_UNIT = 1e9  # GHz
+RESISTANCE_UNIT = 1.0  # Ohm
 """
 常见超导材料及其对应的超导能隙：
 
@@ -125,18 +126,35 @@ class Transmon():
         return EJ
 
     @staticmethod
-    def _levels(Ec, EJ, ng=0.0, gridSize=51, select_range=(0, 10)):
-        n = np.arange(gridSize) - gridSize // 2
-        w = eigvalsh_tridiagonal(4 * Ec * (n - ng)**2,
-                                 -EJ / 2 * np.ones(gridSize - 1),
-                                 select='i',
-                                 select_range=select_range)
-        return w
+    def _levels(Ec, EJ, ng=0.0, grid_size=None, select_range=(0, 10)):
+        x_arr = np.asarray(EJ)
+        is_scalar = x_arr.ndim == 0
 
-    @lru_cache(maxsize=128)
-    def levels(self, flux=0, ng=0):
-        return self._levels(self.Ec, self._flux_to_EJ(flux, self.EJ, self.d),
-                            ng)
+        if grid_size is None:
+            grid_size = max(select_range) + 11
+        n = np.arange(grid_size) - grid_size // 2
+        n_levels = select_range[1] - select_range[0]
+        results = np.zeros((len(x_arr), n_levels))
+        diag = 4 * Ec * (n - ng)**2
+
+        for i, ej_val in enumerate(EJ.reshape(-1)):
+            off_diag = -ej_val / 2 * np.ones(grid_size - 1)
+            w = eigvalsh_tridiagonal(diag,
+                                     off_diag,
+                                     select='i',
+                                     select_range=select_range)
+            results[i] = w[1:] - w[0]
+        if is_scalar:
+            return results[0]
+        else:
+            return results.reshape(*EJ.shape, n_levels)
+
+    def levels(self, flux=0, ng=0, select_range=(0, 10), grid_size=None):
+        return self._levels(self.Ec,
+                            self._flux_to_EJ(flux, self.EJ, self.d),
+                            ng,
+                            select_range=select_range,
+                            grid_size=grid_size)
 
     @property
     def EJ1_EJ2(self):
@@ -146,7 +164,23 @@ class Transmon():
         a = self.levels(flux, ng=0 + ng)
         b = self.levels(flux, ng=0.5 + ng)
 
-        return (a[1 + k] - a[k]) - (b[1 + k] - b[k])
+        return (a[..., 1 + k] - a[..., k]) - (b[..., 1 + k] - b[..., k])
+
+
+def transmon_levels(x,
+                    period,
+                    offset,
+                    EJS,
+                    Ec,
+                    d,
+                    ng=0.0,
+                    grid_size=None,
+                    select_range=(0, 10)):
+    q = Transmon(EJ=EJS, Ec=Ec, d=d)
+    return q.levels(flux=(x - offset) / period,
+                    ng=ng,
+                    select_range=select_range,
+                    grid_size=grid_size)
 
 
 def mass(C):
@@ -167,19 +201,19 @@ def mass(C):
     return M
 
 
-def Rn_to_EJ(Rn, gap=200e-6, T=0.01):
+def Rn_to_EJ(Rn, gap=200, T=10):
     """
     Rn: normal resistance in Ohm
     gap: superconducting gap in ueV
-    T: temperature in K
+    T: temperature in mK
 
     return: EJ in GHz
     """
     from scipy.constants import e, h, hbar, k, pi
 
-    Delta = gap * e
-    Ic = pi * Delta / (2 * e * Rn * RESISTANCE_UNIT) * np.tanh(Delta /
-                                                               (2 * k * T))
+    Delta = gap * e * 1e-6
+    Ic = pi * Delta / (2 * e * Rn * RESISTANCE_UNIT) * np.tanh(
+        Delta / (2 * k * T * 1e-3))
     EJ = Ic * hbar / (2 * e)
     return EJ / h / FREQ_UNIT
 
@@ -238,24 +272,30 @@ def phi_op(N=5):
     return ifft(T, overwrite_x=True)
 
 
-def H_C(C, N=5, ng=None):
+def H_C(C, N=5, ng=None, decouple=False):
+    num_qubits = C.shape[0]
     if ng is None:
-        num_qubits = C.shape[0]
+        ng = np.zeros(num_qubits)
+    elif isinstance(ng, (int, float)):
+        ng = np.full(num_qubits, ng)
+    elif isinstance(ng, (list, tuple)):
+        ng = np.array(ng)
     else:
-        num_qubits = C.shape[0] - len(ng)
+        raise ValueError("ng must be a number or a list of numbers")
 
     A = np.linalg.inv(mass(C))
 
     n = n_op(N)
     I = np.eye(n.shape[0])
 
+    if decouple:
+        return [0.5 * A[i, i] * (n - ng[i])**2 for i in range(num_qubits)]
+
     n_ops = []
     for i in range(num_qubits):
         n_ops.append(
-            reduce(np.kron, [n if j == i else I for j in range(num_qubits)]))
-    dim = n_ops[0].shape[0]
-    for v in ng:
-        n_ops.append(np.diag([np.mod(v + 0.5, 1) - 0.5] * dim))
+            reduce(np.kron,
+                   [n - ng[i] if j == i else I for j in range(num_qubits)]))
 
     ret = np.zeros_like(n_ops[0], dtype=float)
 
@@ -265,11 +305,14 @@ def H_C(C, N=5, ng=None):
     return ret
 
 
-def H_phi(Rn, flux, d=0, N=5):
+def H_phi(Rn, flux, d=0, gap=200, T=10, N=5, decouple=False):
     num_qubits = Rn.shape[0]
-    EJ = flux_to_EJ(flux, Rn_to_EJ(Rn), d)
+    EJ = flux_to_EJ(flux, Rn_to_EJ(Rn, gap, T), d)
     op = cos_phi_op(N)
     I = np.eye(op.shape[0])
+
+    if decouple:
+        return [-EJ[i] * op for i in range(num_qubits)]
 
     ret = np.zeros((op.shape[0]**num_qubits, op.shape[0]**num_qubits),
                    dtype=float)
@@ -280,60 +323,57 @@ def H_phi(Rn, flux, d=0, N=5):
     return ret
 
 
-def _eig_singal_qubit(M, EJ, ng=0.0, levels=5, eps=1e-6):
-    E = None
+def spectrum(C=100.0,
+             Rn=6000.0,
+             flux=0.0,
+             ng=0.0,
+             d=0.0,
+             levels=5,
+             gap=200.0,
+             T=10.0,
+             selector=None,
+             decouple=False):
+    """
+    C: capacitance matrix in fF
+    Rn: normal resistance in Ohm
+    flux: flux in Phi_0
+    ng: charge bias
+    d: asymmetry parameter
+    levels: number of levels
+    gap: superconducting gap in ueV
+    T: temperature in mK
 
-    for N in range(levels, 100):
-        n = n_op(N)
-        cos_phi = cos_phi_op(N)
-        H = 0.5 / M * (n - ng)**2 - EJ * cos_phi
-        w, v = np.linalg.eigh(H)
+    return: spectrum in GHz
+    """
+    if decouple:
+        w0 = [
+            np.linalg.eigvalsh(hc + hp) for hc, hp in zip(
+                H_C(C, N=levels, ng=ng, decouple=True),
+                H_phi(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True))
+        ]
+        w0 = np.sort([np.sum(l) for l in itertools.product(*w0)])
+        return w0[1:] - w0[0]
+    H = H_C(C, N=levels, ng=ng) + H_phi(Rn, flux, d=d, gap=gap, T=T, N=levels)
+    if selector is None:
+        w = np.linalg.eigvalsh(H)
+        return w[1:] - w[0]
 
-        if E is not None:
-            if np.all(np.abs(E[:levels] - w[:levels]) < eps):
-                break
-        E = w
+    assert len(
+        selector) == C.shape[0], "selector must be a list of qubit indices"
 
-    return w, v.T @ n @ v, v, N
+    w, psi = np.linalg.eigh(H)
 
+    H0 = [
+        hc + hp for hc, hp in zip(
+            H_C(C, N=levels, ng=ng, decouple=True),
+            H_phi(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True))
+    ]
+    w0, baises = [], []
+    for h in H0:
+        e, v = np.linalg.eigh(h)
+        w0.append(e)
+        baises.append(v)
+    psi0 = reduce(np.kron, [baises[q][:, i] for q, i in enumerate(selector)])
+    overlap = np.abs(psi0.T @ psi)**2
 
-def spectrum(C, Rn, flux, ng=0.0, d=0, N=5):
-    if isinstance(C, (int, float)):
-        C = np.array([[C]])
-    num_qubits = C.shape[0]
-    if isinstance(Rn, (int, float)):
-        Rn = Rn * np.ones(num_qubits)
-
-    A = np.linalg.inv(mass(C))
-    M = 1 / np.diag(A)
-    EJ = flux_to_EJ(flux, Rn_to_EJ(Rn), d)
-
-    H0 = []
-    n_ops = []
-    Udgs = []
-
-    for m, Ej in zip(M, EJ):
-        E, n, Udg, Ns = _eig_singal_qubit(m, Ej, ng=ng, levels=N)
-        H0.append(E[:2 * Ns + 1])
-        n_ops.append(n[:2 * Ns + 1, :2 * Ns + 1])
-        Udgs.append(Udg[:2 * Ns + 1, :2 * Ns + 1])
-
-    tenser_n_ops = []
-    for i in range(num_qubits):
-        tenser_n_ops.append(
-            reduce(np.kron, [
-                n_ops[i] if j == i else np.eye(n_ops[j].shape[0])
-                for j in range(num_qubits)
-            ]))
-
-    H = np.zeros((N**num_qubits, N * num_qubits), dtype=float)
-
-    H0 = np.diag(reduce(np.kron, [H0[i] for i in range(num_qubits)]))
-    H = np.zeros_like(H0)
-    H += H0
-
-    for i in range(num_qubits):
-        for j in range(i):
-            H += A[i, j] * tenser_n_ops[i] * tenser_n_ops[j]
-    w = np.linalg.eigvalsh(H)
-    return w
+    return overlap[:, 1:], w[1:] - w[0]
