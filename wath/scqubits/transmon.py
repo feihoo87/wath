@@ -359,16 +359,16 @@ class Transmon():
         return (a[..., 1 + k] - a[..., k]) - (b[..., 1 + k] - b[..., k])
 
 
-def transmon_levels(x,
-                    period,
-                    offset,
-                    EJS,
-                    Ec,
-                    d,
-                    ng=0.0,
-                    levels=5,
-                    select_range=None):
-    """计算 Transmon 量子比特能级的便捷函数。
+def transmon_spectrum(x,
+                      period,
+                      offset,
+                      EJS,
+                      Ec,
+                      d,
+                      ng=0.0,
+                      levels=2,
+                      select_range=None):
+    """计算 Transmon 量子比特能谱的便捷函数。
 
     支持通过 x 值、周期和偏移量来计算对应的能级，适用于拟合实验数据。
 
@@ -384,16 +384,14 @@ def transmon_levels(x,
         select_range (tuple, 可选): 返回的能级范围，默认为 None（计算前 levels 个能级）。
 
     返回:
-        array: 本征值（能级），形状为 (levels,)。
+        array: 能谱，形状为 (levels,)。
 
     公式:
         flux = (x - offset) / period
     """
-    q = Transmon(EJ=EJS, Ec=Ec, d=d)
-    return q.levels(flux=(x - offset) / period,
-                    ng=ng,
-                    N=levels,
-                    select_range=select_range)
+    w = eig_singal_qubit(Ec, flux_to_EJ((x - offset) / period, EJS, d), ng,
+                         levels + 1, select_range, True)
+    return w[1:] - w[0]
 
 
 def Rn_to_EJ(Rn, gap=200, T=10):
