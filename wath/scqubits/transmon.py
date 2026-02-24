@@ -1,4 +1,5 @@
 import itertools
+from collections import defaultdict
 from functools import reduce
 
 import numpy as np
@@ -9,6 +10,63 @@ from scipy.optimize import minimize
 CAP_UNIT = 1e-15  # fF
 FREQ_UNIT = 1e9  # GHz
 RESISTANCE_UNIT = 1.0  # Ohm
+
+
+def connected_components(nodes, junctions):
+    graph = defaultdict(set)
+    for a, b in junctions:
+        graph[a].add(b)
+        graph[b].add(a)
+
+    visited = set()
+
+    comps = []
+
+    for n in nodes:
+        if n in visited:
+            continue
+
+        stack = [n]
+        comp = []
+        visited.add(n)
+
+        while stack:
+            x = stack.pop()
+            comp.append(x)
+            for y in graph[x]:
+                if y not in visited:
+                    visited.add(y)
+                    stack.append(y)
+
+        comps.append(comp)
+
+    return comps
+
+
+def complete_incidence_matrix(nodes, junctions):
+    n = len(nodes)
+    idx = {name: i for i, name in enumerate(nodes)}
+
+    comps = connected_components(nodes, junctions)
+
+    # 必须满足可逆条件
+    assert len(junctions) + len(comps) == n, \
+        "junctions must form a spanning forest"
+
+    S = np.zeros((n, n), dtype=int)
+
+    # ----- junction rows -----
+    for i, (a, b) in enumerate(junctions):
+        S[i, idx[a]] = 1
+        S[i, idx[b]] = -1
+
+    # ----- component rows -----
+    offset = len(junctions)
+    for k, comp in enumerate(comps):
+        for node in comp:
+            S[offset + k, idx[node]] = 1
+
+    return S
 
 
 def tenser(matrices):
@@ -170,27 +228,6 @@ def transmon_levels(x,
                     grid_size=grid_size)
 
 
-def mass(C):
-    """
-    C: capacitance matrix in fF
-
-    M[i,i] = C[i,i] + sum_{j \ne i} C[i,j]
-    M[i,j] = -C[i,j]  when i \ne j
-
-    return: mass matrix in GHz^-1
-    """
-    from scipy.constants import e, h
-
-    a = np.diag(C)
-    b = C - np.diag(a)
-    c = np.sum(b, axis=0)
-    C = np.diag(a + c) - b
-
-    # convert unit of capacitance, make sure energy unit is GHz
-    M = C * CAP_UNIT / (4 * e**2 / h / FREQ_UNIT)
-    return M
-
-
 def Rn_to_EJ(Rn, gap=200, T=10):
     """
     Rn: normal resistance in Ohm
@@ -262,66 +299,29 @@ def phi_op(N=5):
     return ifft(T, overwrite_x=True)
 
 
-def H_C(C, N=5, ng=None, decouple=False):
-    num_qubits = C.shape[0]
-    if ng is None:
-        ng = np.zeros(num_qubits)
-    elif isinstance(ng, (int, float)):
-        ng = np.full(num_qubits, ng)
-    elif isinstance(ng, (list, tuple, np.ndarray)):
-        ng = np.asarray(ng)
-        assert ng.ndim == 1, "ng must be a 1D array"
-        assert ng.shape[
-            0] == num_qubits, "ng must have the same length as the number of qubits"
-    else:
-        raise ValueError("ng must be a number or a list of numbers")
+def Ec_matrix_from_capacitance(C, nodes, junctions):
+    """
+    C: capacitance matrix in fF
+    nodes: list of nodes
+    junctions: list of junctions
+    return: Ec matrix in GHz
+    """
+    from scipy.constants import e, h
 
-    A = np.linalg.inv(mass(C))
-    n = np.arange(-N, N + 1)
-    n_ops = [n - ng[i] for i in range(num_qubits)]
-
-    if decouple:
-        return [0.5 * A[i, i] * n_ops[i]**2
-                for i in range(num_qubits)], n_ops, A
-
-    I = np.ones_like(n)
-
-    H_C_diag = np.sum([
-        tenser([
-            A[i, i] / 2 * n_ops[i]**2 if i == j else I
-            for i in range(num_qubits)
-        ]) for j in range(num_qubits)
-    ],
-                      axis=0)
-    for i, j in itertools.combinations(range(num_qubits), r=2):
-        H_C_diag += A[i, j] * tenser(
-            [n_ops[k] if k == i or k == j else I for k in range(num_qubits)])
-    return np.diag(H_C_diag)
+    # unit: GHz
+    Ec = np.linalg.inv(C * CAP_UNIT) * 2 * e**2 / h / FREQ_UNIT
+    S = complete_incidence_matrix(nodes, junctions)
+    V = np.linalg.inv(S)
+    Ec = V.T @ Ec @ V
+    return Ec[:len(junctions), :len(junctions)]
 
 
-def H_J(Rn, flux, d=0, gap=200, T=10, N=5, decouple=False):
-    num_qubits = Rn.shape[0]
-    EJ = flux_to_EJ(flux, Rn_to_EJ(Rn, gap, T), d)
-
-    if decouple:
-        return [np.full(2 * N, -0.5 * EJ[i]) for i in range(num_qubits)]
-
-    op = cos_phi_op(N)
-    I = np.eye(op.shape[0])
-    ret = np.zeros((op.shape[0]**num_qubits, op.shape[0]**num_qubits),
-                   dtype=float)
-    for i in range(num_qubits):
-        ret -= EJ[i] * tenser([op if j == i else I for j in range(num_qubits)])
-
-    return ret
-
-
-def _eig_singal_qubit(A, EJ, ng=0.0, levels=5, eps=1e-6):
+def eig_singal_qubit(Ec, EJ, ng=0.0, levels=5, eps=1e-6):
     E = None
 
-    for N in range(levels, 100):
+    for N in range(levels + 2, 100):
         n = np.arange(-N, N + 1) - ng
-        w, v = eigh_tridiagonal(0.5 * A * n**2, -EJ * np.full(2 * N, 0.5))
+        w, v = eigh_tridiagonal(4 * Ec * n**2, -EJ * np.full(2 * N, 0.5))
         v = v[:, :levels]
         w = w[:levels]
         if E is not None:
@@ -331,40 +331,34 @@ def _eig_singal_qubit(A, EJ, ng=0.0, levels=5, eps=1e-6):
     return w, v.T.conj() @ np.diag(n) @ v, v, N
 
 
-def spectrum(C=100.0,
-             Rn=6000.0,
+def spectrum(Ec=100.0,
+             EJS=6000.0,
              flux=0.0,
              ng=0.0,
              d=0.0,
              levels=5,
-             gap=200.0,
-             T=10.0,
              decouple=False,
              return_psi=False):
     """
-    C: capacitance matrix in fF
-    Rn: normal resistance in Ohm
+    Ec: capacitance matrix in GHz
+    EJS: symmetric Josephson energy in GHz
     flux: flux in Phi_0
     ng: charge bias
     d: asymmetry parameter
     levels: number of levels
-    gap: superconducting gap in ueV
-    T: temperature in mK
 
     return: spectrum in GHz
     """
-    C = np.atleast_2d(C)
-    Rn, flux = np.atleast_1d(Rn, flux)
+    Ec = np.atleast_2d(Ec)
+    EJS, flux = np.atleast_1d(EJS, flux)
 
-    num_qubits = C.shape[0]
+    num_qubits = Ec.shape[0]
     w0, n_ops = [], []
-    h_c_ops, nn, A = H_C(C, N=levels, ng=ng, decouple=True)
-    h_j_ops = H_J(Rn, flux, d=d, gap=gap, T=T, N=levels, decouple=True)
-    for hc, hp, n in zip(h_c_ops, h_j_ops, nn):
-        e, v = eigh_tridiagonal(hc, hp)
+    for Ec_, EJ in zip(np.diag(Ec), flux_to_EJ(flux, EJS, d)):
+        e, n, v, N = eig_singal_qubit(Ec_, EJ, ng=ng, levels=levels)
         w0.append(e[:levels])
         v = v[:, :levels]
-        n_ops.append(v.T.conj() @ np.diag(n) @ v)
+        n_ops.append(n)
 
     w0 = np.sum(np.meshgrid(*w0, copy=False, indexing='ij'),
                 axis=0).reshape(-1)
@@ -375,14 +369,15 @@ def spectrum(C=100.0,
 
     I = np.eye(levels)
 
-    H = np.diag(w0)
+    H0 = np.diag(w0)
+    Hc = np.zeros_like(H0)
     for i, j in itertools.combinations(range(num_qubits), r=2):
-        H += A[i, j] * tenser(
+        Hc += 8 * Ec[i, j] * tenser(
             [n_ops[k] if k == i or k == j else I for k in range(num_qubits)])
 
     if return_psi:
-        w, psi = eigh(H)
-        return w[1:] - w[0], psi[:, 1:]
+        w, psi = eigh(H0 + Hc)
+        return w[1:] - w[0], psi[:, 1:], Hc
     else:
-        w = eigvalsh(H)
+        w = eigvalsh(H0 + Hc)
         return w[1:] - w[0]
