@@ -9,24 +9,6 @@ from scipy.optimize import minimize
 CAP_UNIT = 1e-15  # fF
 FREQ_UNIT = 1e9  # GHz
 RESISTANCE_UNIT = 1.0  # Ohm
-"""
-常见超导材料及其对应的超导能隙：
-
-| 超导材料 | 超导能隙 (Δ, $\\mu$eV)|
-|---------|--------------------|
-| 铝 (Al) |         170        |
-| 钽 (Ta) |         700-1,000  |
-| 铌 (Nb) |         1500       |
-| 汞 (Hg) |         16         |
-| 铍 (Be) |         300-450    |
-| 镍 (Ni) |         200        |
-| 锡 (Sn) |         1100       |
-| 铅 (Pb) |         1400       |
-| 镧钡铜氧化物 (LBCO) |  20,000-30,000   |
-| 高温钡镧铜氧化物 (BSCCO) | 10,000-15,000 |
-
-请注意，这些值可能因材料的纯度、制备条件等因素而有所变化。
-"""
 
 
 def tenser(matrices):
@@ -192,6 +174,9 @@ def mass(C):
     """
     C: capacitance matrix in fF
 
+    M[i,i] = C[i,i] + sum_{j \ne i} C[i,j]
+    M[i,j] = -C[i,j]  when i \ne j
+
     return: mass matrix in GHz^-1
     """
     from scipy.constants import e, h
@@ -313,28 +298,37 @@ def H_C(C, N=5, ng=None, decouple=False):
             [n_ops[k] if k == i or k == j else I for k in range(num_qubits)])
     return np.diag(H_C_diag)
 
-    # for i, n_i in enumerate(n_ops):
-    #     for j, n_j in enumerate(n_ops):
-    #         ret += n_i * A[i, j] / 2 * n_j
-    # return ret
-
 
 def H_J(Rn, flux, d=0, gap=200, T=10, N=5, decouple=False):
     num_qubits = Rn.shape[0]
     EJ = flux_to_EJ(flux, Rn_to_EJ(Rn, gap, T), d)
-    op = cos_phi_op(N)
-    I = np.eye(op.shape[0])
 
     if decouple:
-        op = np.full(2 * N, 0.5)
-        return [-EJ[i] * op for i in range(num_qubits)]
+        return [np.full(2 * N, -0.5 * EJ[i]) for i in range(num_qubits)]
 
+    op = cos_phi_op(N)
+    I = np.eye(op.shape[0])
     ret = np.zeros((op.shape[0]**num_qubits, op.shape[0]**num_qubits),
                    dtype=float)
     for i in range(num_qubits):
         ret -= EJ[i] * tenser([op if j == i else I for j in range(num_qubits)])
 
     return ret
+
+
+def _eig_singal_qubit(A, EJ, ng=0.0, levels=5, eps=1e-6):
+    E = None
+
+    for N in range(levels, 100):
+        n = np.arange(-N, N + 1) - ng
+        w, v = eigh_tridiagonal(0.5 * A * n**2, -EJ * np.full(2 * N, 0.5))
+        v = v[:, :levels]
+        w = w[:levels]
+        if E is not None:
+            if np.all(np.abs(E - w) < eps):
+                break
+        E = w
+    return w, v.T.conj() @ np.diag(n) @ v, v, N
 
 
 def spectrum(C=100.0,
@@ -359,6 +353,9 @@ def spectrum(C=100.0,
 
     return: spectrum in GHz
     """
+    C = np.atleast_2d(C)
+    Rn, flux = np.atleast_1d(Rn, flux)
+
     num_qubits = C.shape[0]
     w0, n_ops = [], []
     h_c_ops, nn, A = H_C(C, N=levels, ng=ng, decouple=True)
@@ -372,7 +369,7 @@ def spectrum(C=100.0,
     w0 = np.sum(np.meshgrid(*w0, copy=False, indexing='ij'),
                 axis=0).reshape(-1)
 
-    if decouple:
+    if decouple or num_qubits == 1:
         w0 = np.sort(w0)
         return w0[1:] - w0[0]
 
@@ -380,7 +377,7 @@ def spectrum(C=100.0,
 
     H = np.diag(w0)
     for i, j in itertools.combinations(range(num_qubits), r=2):
-        H = H + A[i, j] * tenser(
+        H += A[i, j] * tenser(
             [n_ops[k] if k == i or k == j else I for k in range(num_qubits)])
 
     if return_psi:
