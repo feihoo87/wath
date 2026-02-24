@@ -550,14 +550,6 @@ def n_op(N=5):
     return np.diag(np.arange(-N, N + 1))
 
 
-# def cos_phi_op(N=5):
-#     from scipy.sparse import diags
-#     return diags(
-#         [np.full((2 * N, ), 0.5),
-#          np.full(
-#              (2 * N, ), 0.5), [0.5], [0.5]], [1, -1, 2 * N, -2 * N]).toarray()
-
-
 def cos_phi_op(N=5):
     """创建相位余弦算符 cos(φ̂) 的矩阵表示。
 
@@ -581,14 +573,6 @@ def cos_phi_op(N=5):
     from scipy.sparse import diags
     return diags([np.full(
         (2 * N, ), 0.5), np.full((2 * N, ), 0.5)], [1, -1]).toarray()
-
-
-# def sin_phi_op(N=5):
-#     from scipy.sparse import diags
-#     return diags(
-#         [np.full((2 * N, ), 0.5j),
-#          np.full((2 * N, ), -0.5j), [-0.5j], [0.5j]],
-#         [1, -1, 2 * N, -2 * N]).toarray()
 
 
 def sin_phi_op(N=5):
