@@ -300,72 +300,7 @@ class Transmon():
         ret = minimize(err, x0=[EJS, Ec, d])
         self._set_params_EJS_Ec_d(*ret.x)
 
-    @staticmethod
-    def _flux_to_EJ(flux, EJS, d=0):
-        """根据磁通量计算有效的约瑟夫森能量。
-
-        对于具有不对称 SQUID 的磁通可调量子比特，
-        有效约瑟夫森能量随磁通量变化。
-
-        参数:
-            flux (float): 磁通量，以磁通量子 Φ₀ 为单位。
-            EJS (float): 对称约瑟夫森能量（flux=0 时的有效 EJ），单位 GHz。
-            d (float, 可选): 非对称参数，默认为 0（对称）。
-
-        返回:
-            float: 给定磁通量下的有效约瑟夫森能量，单位 GHz。
-
-        公式:
-            EJ(flux) = EJS * √(cos²(π·flux) + d²·sin²(π·flux))
-        """
-        F = np.pi * flux
-        EJ = EJS * np.sqrt(np.cos(F)**2 + d**2 * np.sin(F)**2)
-        return EJ
-
-    @staticmethod
-    def _levels(Ec, EJ, ng=0.0, grid_size=None, select_range=(0, 10)):
-        """计算 Transmon 量子比特的能级。
-
-        使用三对角矩阵特征值算法高效求解电荷基下的哈密顿量。
-        支持标量和数组形式的 EJ 输入。
-
-        参数:
-            Ec (float): 充电能量，单位 GHz。
-            EJ (float or array): 约瑟夫森能量，单位 GHz。可以是标量或数组。
-            ng (float, 可选): 电荷偏置，默认为 0。
-            grid_size (int, 可选): 电荷基的大小，默认为 select_range[1] + 11。
-            select_range (tuple, 可选): 返回的能级范围 (start, end)，默认为 (0, 10)。
-
-        返回:
-            array: 相对于基态的能级。如果 EJ 是标量，返回形状为 (n_levels,)；
-                如果 EJ 是数组，返回形状为 (*EJ.shape, n_levels)。
-
-        公式:
-            哈密顿量: H = 4Ec(n - ng)² - (EJ/2)(|n⟩⟨n+1| + |n+1⟩⟨n|)
-        """
-        x_arr = np.asarray(EJ)
-        is_scalar = x_arr.ndim == 0
-
-        if grid_size is None:
-            grid_size = max(select_range) + 11
-        n = np.arange(grid_size) - grid_size // 2
-        n_levels = select_range[1] - select_range[0]
-        results = np.zeros((len(x_arr), n_levels))
-        diag = 4 * Ec * (n - ng)**2
-
-        for i, ej_val in enumerate(EJ.reshape(-1)):
-            off_diag = -ej_val / 2 * np.ones(grid_size - 1)
-            w = eigvalsh_tridiagonal(diag,
-                                     off_diag,
-                                     select='i',
-                                     select_range=select_range)
-            results[i] = w[1:] - w[0]
-        if is_scalar:
-            return results[0]
-        else:
-            return results.reshape(*EJ.shape, n_levels)
-
-    def levels(self, flux=0, ng=0, select_range=(0, 10), grid_size=None):
+    def levels(self, flux=0, ng=0, N=5, select_range=None):
         """计算当前参数设置下的 Transmon 能级。
 
         使用对象的 Ec、EJ 和 d 参数计算在指定磁通量和电荷偏置下的能级。
@@ -373,22 +308,19 @@ class Transmon():
         参数:
             flux (float, 可选): 磁通量，以 Φ₀ 为单位，默认为 0。
             ng (float, 可选): 电荷偏置，默认为 0。
-            select_range (tuple, 可选): 返回的能级范围 (start, end)，默认为 (0, 10)。
-            grid_size (int, 可选): 电荷基的大小，默认为 None（自动计算）。
+            N (int, 可选): 计算的能级数，默认为 5。
+            select_range (tuple, 可选): 返回的能级范围 (start, end)。
 
         返回:
-            array: 相对于基态的能级数组。
-
-        示例:
-            >>> q = Transmon(EJ=20, Ec=0.2)
-            >>> q.levels()[:3]  # 前三个能级
-            array([0.        , 4.963..., 9.726...])
+            array: 本征值（能级），形状为 (N,)。
         """
-        return self._levels(self.Ec,
-                            self._flux_to_EJ(flux, self.EJ, self.d),
-                            ng,
-                            select_range=select_range,
-                            grid_size=grid_size)
+        w, *_ = eig_singal_qubit(self.Ec,
+                                 flux_to_EJ(flux, self.EJ, self.d),
+                                 ng,
+                                 levels=N,
+                                 select_range=select_range,
+                                 eigvals_only=True)
+        return w
 
     @property
     def EJ1_EJ2(self):
@@ -434,8 +366,8 @@ def transmon_levels(x,
                     Ec,
                     d,
                     ng=0.0,
-                    grid_size=None,
-                    select_range=(0, 10)):
+                    levels=5,
+                    select_range=None):
     """计算 Transmon 量子比特能级的便捷函数。
 
     支持通过 x 值、周期和偏移量来计算对应的能级，适用于拟合实验数据。
@@ -448,11 +380,11 @@ def transmon_levels(x,
         Ec (float): 充电能量，单位 GHz。
         d (float): 非对称参数。
         ng (float, 可选): 电荷偏置，默认为 0。
-        grid_size (int, 可选): 电荷基大小，默认为 None（自动计算）。
-        select_range (tuple, 可选): 返回的能级范围，默认为 (0, 10)。
+        levels (int, 可选): 计算的能级数，默认为 5。
+        select_range (tuple, 可选): 返回的能级范围，默认为 None（计算前 levels 个能级）。
 
     返回:
-        array: 相对于基态的能级。
+        array: 本征值（能级），形状为 (levels,)。
 
     公式:
         flux = (x - offset) / period
@@ -460,8 +392,8 @@ def transmon_levels(x,
     q = Transmon(EJ=EJS, Ec=Ec, d=d)
     return q.levels(flux=(x - offset) / period,
                     ng=ng,
-                    select_range=select_range,
-                    grid_size=grid_size)
+                    N=levels,
+                    select_range=select_range)
 
 
 def Rn_to_EJ(Rn, gap=200, T=10):
@@ -666,7 +598,13 @@ def Ec_matrix_from_capacitance(C, nodes, junctions):
     return Ec[:len(junctions), :len(junctions)]
 
 
-def eig_singal_qubit(Ec, EJ, ng=0.0, levels=5, eps=1e-6):
+def eig_singal_qubit(Ec,
+                     EJ,
+                     ng=0.0,
+                     levels=5,
+                     eps=1e-6,
+                     select_range=None,
+                     eigvals_only=False):
     """计算单量子比特的本征值和本征向量（自适应网格）。
 
     使用自适应电荷基大小来精确计算单 Transmon 量子比特的本征问题。
@@ -678,13 +616,18 @@ def eig_singal_qubit(Ec, EJ, ng=0.0, levels=5, eps=1e-6):
         ng (float, 可选): 电荷偏置，默认为 0。
         levels (int, 可选): 需要计算的能级数，默认为 5。
         eps (float, 可选): 收敛精度，默认为 1e-6。
+        select_range (tuple, 可选): 返回的能级范围 (start, end)，默认为 None（计算所有能级）。
+        eigvals_only (bool, 可选): 是否只计算本征值，默认为 False。
 
     返回:
         tuple: (w, n, v, N)
             - w (array): 本征值（能级），形状为 (levels,)。
-            - n (array): 电荷算符的期望值 n̂ 在本征态下的矩阵，形状为 (levels, levels)。
-            - v (array): 本征向量矩阵，形状为 (2N+1, levels)。
+            - n (array): 电荷算符的期望值 n̂ 在本征态下的矩阵，形状为 (levels, levels)。如果 eigvals_only=True，则返回 None。
+            - v (array): 本征向量矩阵，形状为 (2N+1, levels)。如果 eigvals_only=True，则返回 None。
             - N (int): 最终使用的电荷基大小。
+
+    公式:
+        哈密顿量: H = 4Ec(n - ng)² - (EJ/2)(|n⟩⟨n+1| + |n+1⟩⟨n|)
 
     算法:
         1. 从 N = levels + 2 开始构建哈密顿量
@@ -692,16 +635,35 @@ def eig_singal_qubit(Ec, EJ, ng=0.0, levels=5, eps=1e-6):
         3. 增大 N 并重新计算，直到能级变化小于 eps
     """
     E = None
+    if select_range is not None:
+        levels = select_range[1]
 
     for N in range(levels + 2, 100):
         n = np.arange(-N, N + 1) - ng
-        w, v = eigh_tridiagonal(4 * Ec * n**2, -EJ * np.full(2 * N, 0.5))
-        v = v[:, :levels]
-        w = w[:levels]
+        Hc = 4 * Ec * n**2
+        HJ = -EJ * np.full(2 * N, 0.5)
+        if select_range is not None:
+            w = eigvalsh_tridiagonal(Hc,
+                                     HJ,
+                                     select='i',
+                                     select_range=select_range)
+        else:
+            w = eigvalsh_tridiagonal(Hc, HJ)
+            w = w[:levels]
         if E is not None:
             if np.all(np.abs(E - w) < eps):
                 break
         E = w
+    if eigvals_only:
+        return w, None, None, N
+
+    if select_range is not None:
+        w, v = eigh_tridiagonal(Hc, HJ, select='i', select_range=select_range)
+    else:
+        w, v = eigh_tridiagonal(Hc, HJ)
+        v = v[:, :levels]
+        w = w[:levels]
+
     return w, v.T.conj() @ np.diag(n) @ v, v, N
 
 
