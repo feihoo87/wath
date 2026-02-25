@@ -389,9 +389,28 @@ def transmon_spectrum(x,
     公式:
         flux = (x - offset) / period
     """
-    w = eig_singal_qubit(Ec, flux_to_EJ((x - offset) / period, EJS, d), ng,
-                         levels + 1, select_range, True)
-    return w[1:] - w[0]
+    flux = (x - offset) / period
+    EJ_array = flux_to_EJ(flux, EJS, d)
+
+    # 处理标量情况
+    if np.isscalar(EJ_array):
+        w, _, _, _ = eig_singal_qubit(Ec, EJ_array, ng,
+                                      levels + 1, select_range=select_range,
+                                      eigvals_only=True)
+        return w[1:] - w[0]
+
+    # 处理数组情况：对每个 flux 值计算能级
+    EJ_flat = np.asarray(EJ_array).ravel()
+    results = []
+    for EJ in EJ_flat:
+        w, _, _, _ = eig_singal_qubit(Ec, EJ, ng,
+                                      levels + 1, select_range=select_range,
+                                      eigvals_only=True)
+        results.append(w[1:] - w[0])
+
+    # 重塑为 (levels, *x.shape) 的形状
+    result_array = np.array(results)  # shape: (N, levels)
+    return result_array.T.reshape((levels,) + np.shape(x))
 
 
 def Rn_to_EJ(Rn, gap=200, T=10):
@@ -663,6 +682,246 @@ def eig_singal_qubit(Ec,
         w = w[:levels]
 
     return w, v.T.conj() @ np.diag(n) @ v, v, N
+
+
+def fit_transmon_spectrum(x,
+                          y,
+                          x2=None,
+                          y2=None,
+                          p0_list=None,
+                          bounds=None,
+                          ng=0.0,
+                          return_all=False):
+    """拟合 Transmon 量子比特能谱数据。
+
+    根据实验测量的能谱数据，拟合得到 Transmon 的物理参数（EJS, Ec, d, period, offset）。
+    支持同时拟合第一激发态（f01）和第二激发态（f12）的能级数据。
+
+    参数:
+        x (array): 第一激发态的输入值数组（如磁通偏置的原始值）。
+        y (array): 第一激发态的能量值数组（跃迁频率 f01），单位 GHz。
+        x2 (array, 可选): 第二激发态的输入值数组。如果提供，y2 也必须提供。
+        y2 (array, 可选): 第二激发态的能量值数组（跃迁频率 f12），单位 GHz。
+        p0_list (list of tuple, 可选): 多组初始参数值列表。
+            每组参数为 (period, offset, EJS, Ec, d) 的元组。
+            如果为 None，则自动生成多组合理的初始猜测值。
+        bounds (tuple, 可选): 参数的边界约束 (lower, upper)。
+            lower 和 upper 是长度为 5 的数组，分别对应 (period, offset, EJS, Ec, d)。
+            默认为 None，使用自动生成的边界。
+        ng (float, 可选): 电荷偏置，默认为 0。
+        return_all (bool, 可选): 是否返回所有拟合结果，默认为 False。
+            如果为 True，返回所有尝试的拟合结果列表，按拟合优度排序。
+
+    返回:
+        dict: 包含以下键的字典:
+            - 'popt': 最优拟合参数 (period, offset, EJS, Ec, d)
+            - 'pcov': 参数协方差矩阵
+            - 'R_square': 决定系数 R²
+            - 'RMSE': 均方根误差
+            - 'residuals': 残差数组
+            - 'fit_result': 完整的 scipy.optimize.OptimizeResult 对象
+        如果 return_all=True，返回所有拟合结果列表，按 R² 降序排列。
+
+    示例:
+        >>> # 仅拟合 f01 数据
+        >>> result = fit_transmon_spectrum(x, y)
+        >>> period, offset, EJS, Ec, d = result['popt']
+
+        >>> # 同时拟合 f01 和 f12 数据
+        >>> result = fit_transmon_spectrum(x, y, x2, y2)
+
+        >>> # 自定义初始猜测值
+        >>> p0_list = [(1.0, 0.0, 15.0, 0.2, 0.1), (1.0, 0.0, 20.0, 0.15, 0.0)]
+        >>> result = fit_transmon_spectrum(x, y, p0_list=p0_list)
+    """
+    from scipy.optimize import curve_fit, least_squares
+
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    has_second_level = x2 is not None and y2 is not None
+    if has_second_level:
+        x2 = np.asarray(x2)
+        y2 = np.asarray(y2)
+        # 合并数据用于拟合
+        x_combined = np.concatenate([x, x2])
+        y_combined = np.concatenate([y, y2])
+        # 记录分割点，用于区分 f01 和 f12
+        split_idx = len(x)
+    else:
+        x_combined = x
+        y_combined = y
+        split_idx = len(x)
+
+    def residuals_func(params):
+        """计算残差。"""
+        period, offset, EJS, Ec, d = params
+        if period <= 0 or EJS <= 0 or Ec <= 0 or not (0 <= d <= 1):
+            if has_second_level:
+                return np.full(len(y) + len(y2), 1e10)
+            return np.full_like(y, 1e10)
+
+        try:
+            # 计算能谱
+            if has_second_level:
+                # 分别计算 f01 和 f12
+                # f01 使用 x
+                spec1 = transmon_spectrum(x, period, offset, EJS, Ec, d, ng, 1)
+                f01_fit = spec1[0]
+
+                # f12 使用 x2
+                spec2 = transmon_spectrum(x2, period, offset, EJS, Ec, d, ng, 2)
+                f12_fit = spec2[1] - spec2[0]  # E2 - E1
+
+                # 拼接残差
+                return np.concatenate([y - f01_fit, y2 - f12_fit])
+            else:
+                # 只计算 f01
+                spec = transmon_spectrum(x, period, offset, EJS, Ec, d, ng, 1)
+                f01_fit = spec[0]
+                return y - f01_fit
+        except Exception:
+            if has_second_level:
+                return np.full(len(y) + len(y2), 1e10)
+            return np.full_like(y, 1e10)
+
+    def model_func(x_data, period, offset, EJS, Ec, d):
+        """用于 curve_fit 的模型函数（仅支持单能级）。"""
+        spec = transmon_spectrum(x_data, period, offset, EJS, Ec, d, ng, 1)
+        return spec[0]
+
+    # 自动生成初始猜测值
+    if p0_list is None:
+        p0_list = []
+
+        # 从数据估计周期（使用简单的启发式方法）
+        # 对于磁通量子比特，通常数据范围包含约1个周期
+        x_range = np.max(x) - np.min(x)
+        estimated_period = x_range  # 简单假设数据范围约为一个周期
+
+        # 估计 EJS 和 Ec
+        f01_max = np.max(y)
+        f01_min = np.min(y)
+
+        # 从频率估计 EJS 和 Ec
+        # f01 ≈ sqrt(8*EJ*Ec) - Ec
+        # 使用更合理的 Ec 猜测范围
+        Ec_guesses = [0.15, 0.2, 0.25]
+        for Ec_guess in Ec_guesses:
+            EJS_guess = (f01_max + Ec_guess)**2 / (8 * Ec_guess)
+            if EJS_guess > 0:
+                # d 的猜测值
+                if f01_min > 0 and f01_max > f01_min:
+                    # d = EJ_min / EJ_max ≈ ((f01_min + Ec) / (f01_max + Ec))^2
+                    d_sq = ((f01_min + Ec_guess) / (f01_max + Ec_guess))**2
+                    d_guess = np.sqrt(max(0, min(d_sq, 1.0)))
+                else:
+                    d_guess = 0.0
+
+                # 使用简化的 offset 猜测
+                p0_list.append(
+                    (estimated_period, x[np.argmin(y)], EJS_guess, Ec_guess,
+                     d_guess))
+
+        # 添加一些默认的保守猜测
+        p0_list.extend([
+            (1.0, 0.0, 20.0, 0.2, 0.0),
+            (1.0, 0.0, 15.0, 0.2, 0.2),
+            (1.0, 0.0, 25.0, 0.15, 0.1),
+        ])
+
+    # 设置默认边界
+    if bounds is None:
+        lower = [0.01, -np.inf, 0.01, 0.01, 0.0]
+        upper = [np.inf, np.inf, 500.0, 2.0, 1.0]
+        bounds = (lower, upper)
+
+    # 存储所有拟合结果
+    fit_results = []
+
+    # 准备 y 数据用于 goodness_of_fit
+    if has_second_level:
+        y_all = np.concatenate([y, y2])
+    else:
+        y_all = y
+
+    # 尝试每组初始值
+    for i, p0 in enumerate(p0_list):
+        try:
+            # 使用 least_squares 进行鲁棒拟合
+            result = least_squares(
+                residuals_func,
+                p0,
+                bounds=bounds,
+                method='trf',
+                max_nfev=5000,
+                ftol=1e-8,
+                xtol=1e-8,
+            )
+
+            if result.success:
+                # 计算拟合优度
+                fvec = result.fun
+                popt = result.x
+
+                # 使用 simple.py 中的 goodness_of_fit 计算 R²
+                from wath.fit import goodness_of_fit
+                SSE, R_square, Adj_R_sq, RMSE = goodness_of_fit(
+                    len(popt), y_all, fvec)
+
+                fit_results.append({
+                    'popt': popt,
+                    'pcov': None,  # least_squares 不直接提供协方差
+                    'R_square': R_square,
+                    'RMSE': RMSE,
+                    'residuals': fvec,
+                    'fit_result': result,
+                    'p0': p0,
+                })
+        except Exception as e:
+            continue
+
+    # 如果没有成功的拟合，尝试使用 curve_fit（仅支持单能级）
+    if not fit_results and not has_second_level:
+        try:
+            p0 = p0_list[0] if p0_list else (1.0, 0.0, 20.0, 0.2, 0.0)
+            popt, pcov = curve_fit(
+                model_func,
+                x,
+                y,
+                p0=p0,
+                bounds=bounds,
+                maxfev=10000,
+            )
+
+            # 计算残差和 R²
+            y_fit = model_func(x, *popt)
+            fvec = y - y_fit
+
+            from wath.fit import goodness_of_fit
+            SSE, R_square, Adj_R_sq, RMSE = goodness_of_fit(len(popt), y, fvec)
+
+            fit_results.append({
+                'popt': popt,
+                'pcov': pcov,
+                'R_square': R_square,
+                'RMSE': RMSE,
+                'residuals': fvec,
+                'fit_result': None,
+                'p0': p0,
+            })
+        except Exception as e:
+            raise RuntimeError(f"所有拟合尝试均失败: {e}")
+    elif not fit_results:
+        raise RuntimeError("所有拟合尝试均失败")
+
+    # 按 R² 排序
+    fit_results.sort(key=lambda r: r['R_square'], reverse=True)
+
+    if return_all:
+        return fit_results
+    else:
+        return fit_results[0]
 
 
 def spectrum(Ec=100.0,
