@@ -295,6 +295,8 @@ def fit_cosine(data, repeat=1, weight=None, x=None):
             (c + 1)**2 + d**2) * f**2 - 4 * d * e * f)) / (c**2 + d**2 - 1)
         phi = np.arctan2(e - c * e - d * f, f + c * f - d * e) + np.pi / 2
 
+    phi = np.where(R < 0, phi + np.pi, phi)
+    R = np.abs(R)
     return R, offset, phi
 
 
