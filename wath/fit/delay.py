@@ -31,7 +31,7 @@ def fit_relative_delay(waveform, data, sample_rate, fit=True):
     return ret.x[0]
 
 
-def calc_delays(relative_delays: dict[tuple[str, str], float],
+def _calc_delays(relative_delays: dict[tuple[str, str], float],
                 reference: float = 0,
                 reference_channel: Optional[str] = None,
                 full: bool = False) -> dict[str, float]:
@@ -120,6 +120,36 @@ def calc_delays(relative_delays: dict[tuple[str, str], float],
         }
     else:
         return {ch: v + offset for ch, v in zip(channels, beta)}
+
+
+def calc_delays(relative_delays):
+    """分别求解非连通通道图；每个分量的最小 delay 独立归零。"""
+    graph = {}
+    for ch1, ch2 in relative_delays:
+        graph.setdefault(ch1, set()).add(ch2)
+        graph.setdefault(ch2, set()).add(ch1)
+
+    delays = {}
+    visited = set()
+    for start in graph:
+        if start in visited:
+            continue
+        component = set()
+        stack = [start]
+        while stack:
+            channel = stack.pop()
+            if channel in component:
+                continue
+            component.add(channel)
+            stack.extend(graph[channel] - component)
+        visited.update(component)
+        edges = {
+            pair: delay
+            for pair, delay in relative_delays.items()
+            if pair[0] in component
+        }
+        delays.update({channel: float(delay) for channel, delay in _calc_delays(edges).items()})
+    return delays
 
 
 def relative_delay_to_absolute(relative_delays: dict[tuple[str, str], float],
